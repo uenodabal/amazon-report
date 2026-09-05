@@ -1,0 +1,65 @@
+name: Amazon日次レポート
+
+# いつ動かすか
+on:
+  schedule:
+    # GitHubの時刻はUTC（日本時間より9時間前）。
+    # 22:00 UTC ＝ 翌朝 7:00 JST。
+    - cron: "0 22 * * *"
+
+  # GitHubの画面のボタンから、いつでも手動実行できるようにする
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "長期間の取り込み（初回や、数日途切れた後の復旧用）"
+        type: boolean
+        default: false
+
+# 前の実行がまだ終わっていないときに、二重に走らせない
+concurrency:
+  group: amazon-daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # 通常は3〜5分。--full でも余裕を持たせて3時間で打ち切る。
+    timeout-minutes: 180
+
+    steps:
+      - name: コードを取り出す
+        uses: actions/checkout@v4
+
+      - name: Pythonを用意する
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 必要なパッケージを入れる
+        run: pip install -r requirements.txt
+
+      - name: Googleの鍵をファイルに書き出す
+        # Secretsの中身をそのままファイルにする。
+        # 変数経由で渡すのは、JSONに含まれる記号でシェルが壊れないようにするため。
+        env:
+          SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          printf '%s' "$SA_JSON" > service-account.json
+          python -c "import json;json.load(open('service-account.json'));print('鍵の形式は正常です')"
+
+      - name: データを取得してスプレッドシートへ書き込む
+        env:
+          LWA_CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
+          LWA_CLIENT_SECRET: ${{ secrets.LWA_CLIENT_SECRET }}
+          LWA_REFRESH_TOKEN: ${{ secrets.LWA_REFRESH_TOKEN }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: service-account.json
+          PYTHONUNBUFFERED: "1"
+          TZ: Asia/Tokyo
+        run: python run_all.py ${{ inputs.full && '--full' || '' }}
+
+      - name: 鍵を消す
+        # 実行環境は毎回捨てられるが、念のため明示的に消しておく
+        if: always()
+        run: rm -f service-account.json
