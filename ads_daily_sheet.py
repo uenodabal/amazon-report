@@ -45,6 +45,12 @@ def build_rows(data, since=None):
     if since:
         ads_rows = [r for r in ads_rows if r["date"] >= since]
 
+    # 新しい日付が上に来るように並べる（同じ日付内はキャンペーン名の昇順）。
+    # Pythonのsortは安定ソートなので、先にキャンペーン名で昇順に整えてから
+    # 日付だけ降順にすると、同じ日付の中の順序が保たれる。
+    ads_rows = sorted(ads_rows, key=lambda r: r["campaign"])
+    ads_rows = sorted(ads_rows, key=lambda r: r["date"], reverse=True)
+
     for r in ads_rows:
         impressions, clicks, cost = r["impressions"], r["clicks"], r["cost"]
         sales, units = r["sales"], r["units"]

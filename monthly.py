@@ -31,6 +31,7 @@
 
 import argparse
 import sys
+from collections import defaultdict
 from datetime import datetime
 
 from aggregate import Data, delta_pct, pct
@@ -355,42 +356,55 @@ def build_ads_summary(month, cur, prv):
     return rows
 
 
+def _campaign_metrics_row(name, v):
+    """キャンペーン別内訳・日別広告実績で共通の、1行分の指標を計算する。"""
+    impressions = v.get("impressions", 0.0)
+    clicks = v.get("clicks", 0.0)
+    cost = v.get("cost", 0.0)
+    sales = v.get("sales", 0.0)
+    units = v.get("units", 0.0)
+    cpm = cost / impressions * 1000 if impressions else 0.0
+    cpc = cost / clicks if clicks else 0.0
+    cpa = cost / units if units else 0.0
+    roas = round(sales / cost, 2) if cost else 0.0
+    return [
+        name,
+        int(impressions),
+        round(cost),
+        round(cpm),
+        int(clicks),
+        round(cpc),
+        pct(clicks, impressions),
+        int(units),
+        pct(units, clicks),
+        round(cpa),
+        roas,
+        pct(cost, sales),
+    ]
+
+
 def build_campaign_monthly_table(cur):
     """
     広告サマリーの右に添える、キャンペーン別（当月）の内訳表。
     write_range で書き込むための独立した小さな表（見出し行を含む）。
+    末尾に全キャンペーン合計の行を付ける。
     """
     by_campaign = cur.get("by_campaign", {})
     rows = [CAMPAIGN_TABLE_HEADER]
 
     items = sorted(by_campaign.items(), key=lambda kv: kv[1].get("cost", 0.0), reverse=True)
     for name, v in items:
-        impressions = v.get("impressions", 0.0)
-        clicks = v.get("clicks", 0.0)
-        cost = v.get("cost", 0.0)
-        sales = v.get("sales", 0.0)
-        units = v.get("units", 0.0)
-        cpm = cost / impressions * 1000 if impressions else 0.0
-        cpc = cost / clicks if clicks else 0.0
-        cpa = cost / units if units else 0.0
-        roas = round(sales / cost, 2) if cost else 0.0
-        rows.append([
-            name,
-            int(impressions),
-            round(cost),
-            round(cpm),
-            int(clicks),
-            round(cpc),
-            pct(clicks, impressions),
-            int(units),
-            pct(units, clicks),
-            round(cpa),
-            roas,
-            pct(cost, sales),
-        ])
+        rows.append(_campaign_metrics_row(name, v))
 
     if len(rows) == 1:
         rows.append(["この月のキャンペーンデータはまだありません"] + [""] * (len(CAMPAIGN_TABLE_HEADER) - 1))
+        return rows
+
+    total = defaultdict(float)
+    for v in by_campaign.values():
+        for key in ("impressions", "clicks", "cost", "sales", "units"):
+            total[key] += v.get(key, 0.0)
+    rows.append(_campaign_metrics_row("合計", total))
 
     return rows
 
@@ -598,7 +612,7 @@ def main():
                     None,
                 )
                 if ads_heading_index is not None:
-                    anchor = f"H{ads_heading_index + 2}"
+                    anchor = f"G{ads_heading_index + 2}"
                     write_range(
                         cfg, month, anchor, campaign_rows,
                         formatter=lambda sid, r, c, rows: build_side_table_requests(

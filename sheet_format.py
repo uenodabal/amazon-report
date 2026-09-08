@@ -270,7 +270,14 @@ def build_side_table_requests(sheet_id, top_row, top_col, rows, types):
             ))
 
         for row_index in range(data_start, data_end):
-            if (row_index - data_start) % 2 == 1:
+            label = str(rows[row_index - top_row][0]) if rows[row_index - top_row] else ""
+            if label == "合計":
+                requests.append(_cell(
+                    sheet_id, row_index, top_col, top_col + ncols,
+                    {"backgroundColor": TOTAL_BG, "textFormat": {"bold": True}},
+                    "userEnteredFormat(backgroundColor,textFormat)",
+                ))
+            elif (row_index - data_start) % 2 == 1:
                 requests.append(_cell(
                     sheet_id, row_index, top_col, top_col + ncols,
                     {"backgroundColor": BAND_BG}, "userEnteredFormat.backgroundColor",
