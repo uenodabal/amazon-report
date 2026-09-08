@@ -4,8 +4,11 @@ name: Amazon日次レポート
 on:
   schedule:
     # GitHubの時刻はUTC（日本時間より9時間前）。
-    # 22:00 UTC ＝ 翌朝 7:00 JST。
+    # 22:00 UTC ＝ 翌朝 7:00 JST： 注文・売上・手数料・精算・月次シートの本体実行。
     - cron: "0 22 * * *"
+    # 00:20 UTC ＝ 翌朝 9:20 JST： Amazon Adsの自動送信メール（8:45〜9:00頃着）が
+    # 届いた後の追い上げ実行。広告データを取り込み、月次シートを作り直すだけ。
+    - cron: "20 0 * * *"
 
   # GitHubの画面のボタンから、いつでも手動実行できるようにする
   workflow_dispatch:
@@ -55,9 +58,19 @@ jobs:
           LWA_REFRESH_TOKEN: ${{ secrets.LWA_REFRESH_TOKEN }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: service-account.json
+          # Amazon Adsの自動送信メールを読むためのGmailアカウント（IMAP）。
+          # GitHub の Settings > Secrets and variables > Actions で登録してください。
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           PYTHONUNBUFFERED: "1"
           TZ: Asia/Tokyo
-        run: python run_all.py ${{ inputs.full && '--full' || '' }}
+        run: |
+          if [ "${{ github.event.schedule }}" = "20 0 * * *" ]; then
+            echo "モード: 広告データの追い上げ実行（9:20 JST）"
+            python run_all.py --ads-only
+          else
+            python run_all.py ${{ inputs.full && '--full' || '' }}
+          fi
 
       - name: 鍵を消す
         # 実行環境は毎回捨てられるが、念のため明示的に消しておく

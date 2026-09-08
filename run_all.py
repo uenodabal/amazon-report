@@ -38,7 +38,19 @@ JOBS = [
     ("手数料・入金内訳", "finances.py", 30, 180),
     # 精算レポートは90日より前を取得できないため、--full でも6件（約3ヶ月分）が上限
     ("精算レポート", "settlement.py", 3, 6),
+    # Amazon Adsの自動送信メール（毎朝8:45〜9:00頃着）を取り込む。
+    # 本体の実行時刻（毎朝7時台）より後に届くため、この時間の実行では
+    # 前日分のメールを拾うことになる。最新の当日分は ADS_ONLY_JOBS の
+    # 追い上げ実行（毎朝9:20頃）で取り込む。
+    ("広告データ（メール取込）", "ads_email_report.py", 3, 7),
     # 最後にrawデータを集計して月別シートと月次推移を作る
+    ("月別シート・月次推移", "monthly.py", 3, 6),
+]
+
+# 広告メールが届いた後に行う追い上げ実行用（毎朝9:20頃）。
+# 広告データを取り込み直してから、月別シートを再生成するだけでよい。
+ADS_ONLY_JOBS = [
+    ("広告データ（メール取込）", "ads_email_report.py", 3, 7),
     ("月別シート・月次推移", "monthly.py", 3, 6),
 ]
 
@@ -46,6 +58,7 @@ JOBS = [
 JOB_ARG = {
     "settlement.py": "--count",
     "monthly.py": "--months",
+    "ads_email_report.py": "--search-days",
 }
 
 
@@ -141,21 +154,30 @@ def main():
         action="store_true",
         help="長めの期間で取り込む（初回や、実行が数日途切れた後の復旧用）",
     )
+    parser.add_argument(
+        "--ads-only",
+        action="store_true",
+        help="広告データの取込と月次シートの再生成のみ実行（広告メール到着後の追い上げ実行用）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="書き込まずに実行")
     args = parser.parse_args()
 
     cfg = Config()
     cfg.validate(need_sheets=not args.dry_run)
 
+    jobs = ADS_ONLY_JOBS if args.ads_only else JOBS
+
     started_at = datetime.now(JST)
     log("=" * 60)
     log(f"自動取得を開始します（{started_at:%Y-%m-%d %H:%M:%S}）")
-    if args.full:
+    if args.ads_only:
+        log("モード: --ads-only（広告データの追い上げ実行）")
+    elif args.full:
         log("モード: --full（長期間の取り込み）")
     log("=" * 60)
 
     results = []
-    for name, script, days, full_days in JOBS:
+    for name, script, days, full_days in jobs:
         ok, elapsed, detail = run_job(
             name, script, full_days if args.full else days, args.dry_run
         )

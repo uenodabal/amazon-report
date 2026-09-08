@@ -1,0 +1,16 @@
+# 認証情報・秘密情報（絶対にコミットしない）
+.env
+*.env
+service-account.json
+*.json.key
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# 実行ログ・一時ファイル
+logs/
+*.log
+.DS_Store
