@@ -4,7 +4,7 @@
 
   ・月別シート（例「2026-08」）
       ① 月間サマリー（前月比つき、原価・広告費を含む）
-      ② 広告サマリー
+      ② 広告サマリー（右側にキャンペーン別の月間内訳を添える）
       ③ 手数料の内訳
       ④ 売上変動の要因
       ⑤ データの充足状況
@@ -12,6 +12,9 @@
       ⑦ 商品別ランキング（原価・粗利率つき）
   ・月次推移シート（「月次推移」）
       月ごとの主要指標を1行ずつ並べたもの
+
+キャンペーン別の日別実績は、この月別シートではなく別シート
+「日別広告実績」に載せています（ads_daily_sheet.py が作成）。
 
 蓄積されたrawシートを読むだけで、Amazon APIは呼びません。
 
@@ -31,8 +34,8 @@ import sys
 from datetime import datetime
 
 from aggregate import Data, delta_pct, pct
-from common import JST, Config, log, write_rows
-from sheet_format import build_requests
+from common import JST, Config, log, write_range, write_rows
+from sheet_format import CAMPAIGN_TABLE_HEADER, CAMPAIGN_TABLE_TYPES, build_requests, build_side_table_requests
 
 TREND_SHEET = "月次推移"
 
@@ -352,6 +355,46 @@ def build_ads_summary(month, cur, prv):
     return rows
 
 
+def build_campaign_monthly_table(cur):
+    """
+    広告サマリーの右に添える、キャンペーン別（当月）の内訳表。
+    write_range で書き込むための独立した小さな表（見出し行を含む）。
+    """
+    by_campaign = cur.get("by_campaign", {})
+    rows = [CAMPAIGN_TABLE_HEADER]
+
+    items = sorted(by_campaign.items(), key=lambda kv: kv[1].get("cost", 0.0), reverse=True)
+    for name, v in items:
+        impressions = v.get("impressions", 0.0)
+        clicks = v.get("clicks", 0.0)
+        cost = v.get("cost", 0.0)
+        sales = v.get("sales", 0.0)
+        units = v.get("units", 0.0)
+        cpm = cost / impressions * 1000 if impressions else 0.0
+        cpc = cost / clicks if clicks else 0.0
+        cpa = cost / units if units else 0.0
+        roas = round(sales / cost, 2) if cost else 0.0
+        rows.append([
+            name,
+            int(impressions),
+            round(cost),
+            round(cpm),
+            int(clicks),
+            round(cpc),
+            pct(clicks, impressions),
+            int(units),
+            pct(units, clicks),
+            round(cpa),
+            roas,
+            pct(cost, sales),
+        ])
+
+    if len(rows) == 1:
+        rows.append(["この月のキャンペーンデータはまだありません"] + [""] * (len(CAMPAIGN_TABLE_HEADER) - 1))
+
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # ⑥ 日別の推移
 # ---------------------------------------------------------------------------
@@ -539,11 +582,29 @@ def main():
                 f"実入金 {t['net']:,.0f} / 原価 {t['cogs']:,.0f} / "
                 f"広告費 {t['ads_cost']:,.0f} / {len(cur['by_asin'])} ASIN")
 
+            campaign_rows = build_campaign_monthly_table(cur)
+
             if args.dry_run:
                 for row in sheet_rows[:14]:
                     log(f"    {row}")
+                log(f"  （キャンペーン別内訳: {len(campaign_rows) - 1} 件）")
             else:
                 write_rows(cfg, month, sheet_rows, formatter=build_requests)
+
+                # 広告サマリーの右にキャンペーン別内訳を添える（H列から、
+                # 広告サマリーの見出し行と同じ高さに揃える）。
+                ads_heading_index = next(
+                    (i for i, r in enumerate(sheet_rows) if r and r[0] == "■ 広告サマリー"),
+                    None,
+                )
+                if ads_heading_index is not None:
+                    anchor = f"H{ads_heading_index + 2}"
+                    write_range(
+                        cfg, month, anchor, campaign_rows,
+                        formatter=lambda sid, r, c, rows: build_side_table_requests(
+                            sid, r, c, rows, CAMPAIGN_TABLE_TYPES
+                        ),
+                    )
 
         # --- 月次推移（古い順に並べる）------------------------------------
         log("")

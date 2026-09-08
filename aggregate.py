@@ -204,7 +204,9 @@ class Data:
         """
         Amazon Adsの実績（メール取り込み版 raw_ads_email）を読み込む。
 
-        キャンペーン単位ではなく日別の合計だけを使う（商品別の内訳は今のところ不要）。
+        キャンペーン単位・日付単位で1行ずつ保持する（キャンペーン別の内訳表示や
+        日別広告シートに使うため）。全体の合計が必要な場合は summarize() 側で
+        キャンペーンをまたいで合算する。
         広告費は税抜きで記録されているため、ここで税込（×1.1）に換算しておく。
         こうしておけば、以降このデータを使うところ全てが自動的に税込になる。
         """
@@ -216,6 +218,8 @@ class Data:
         h = [str(c) for c in rows[0]]
         idx = {
             "date": index_of(h, "日付", default=0),
+            "campaign": index_of(h, "キャンペーン名"),
+            "impressions": index_of(h, "インプレッション"),
             "clicks": index_of(h, "クリック数"),
             # 「合計費用（調整済み）」は空欄になっていることがあるため、
             # 「合計費用」を正として使い、そちらが空の行だけ調整済みの値で補う。
@@ -233,10 +237,17 @@ class Data:
                 col = idx[key]
                 return to_float(row[col]) if col is not None and len(row) > col else 0.0
 
+            campaign = (
+                str(row[idx["campaign"]]).strip()
+                if idx["campaign"] is not None and len(row) > idx["campaign"]
+                else ""
+            )
             cost = val("cost") or val("cost_adjusted")
 
             self.ads.append({
                 "date": date,
+                "campaign": campaign or "（キャンペーン名不明）",
+                "impressions": val("impressions"),
                 "cost": cost * AD_COST_TAX_MULTIPLIER,
                 "sales": val("sales"),
                 "units": val("units"),
@@ -301,6 +312,16 @@ class Data:
             by_day[r["date"]]["ads_units"] += r["units"]
             by_day[r["date"]]["ads_clicks"] += r["clicks"]
 
+        # キャンペーン別（月間の広告サマリーの右に添える内訳表用）
+        by_campaign = defaultdict(lambda: defaultdict(float))
+        for r in ads:
+            b = by_campaign[r["campaign"]]
+            b["impressions"] += r["impressions"]
+            b["clicks"] += r["clicks"]
+            b["cost"] += r["cost"]
+            b["sales"] += r["sales"]
+            b["units"] += r["units"]
+
         # 商品（ASIN）別
         by_asin = defaultdict(lambda: defaultdict(float))
         for r in traffic:
@@ -319,7 +340,7 @@ class Data:
             by_asin[asin]["fees"] += r["referral"] + r["fba"] + r["other"]
         total["unmapped"] = unmapped_net
 
-        return {"total": total, "by_day": by_day, "by_asin": by_asin}
+        return {"total": total, "by_day": by_day, "by_asin": by_asin, "by_campaign": by_campaign}
 
     def asin_names(self):
         names = {}
@@ -327,3 +348,11 @@ class Data:
             if asin and name and asin not in names:
                 names[asin] = name
         return names
+
+    def ads_all_rows(self):
+        """
+        全期間・キャンペーン×日付ごとの広告実績（日別広告シート用）。
+        raw_ads_email をそのまま読み込んだもの（すでに税込換算済み）を、
+        日付→キャンペーン名の順に並べて返す。
+        """
+        return sorted(self.ads, key=lambda r: (r["date"], r["campaign"]))

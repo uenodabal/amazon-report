@@ -378,6 +378,37 @@ python3 ads_email_report.py --dry-run        # 取得のみ。書き込まない
 
 広告APIのアクセスが有効化された段階で、専用スクリプトへの切り替えを想定しています。
 
+#### キャンペーン別の内訳（月別シートの広告サマリーの右／`日別広告実績`シート）
+
+月別シートの「■ 広告サマリー」の右側（H列以降）に、その月のキャンペーンごとの
+内訳表を添えています。項目はインプレッション・費用・CPM・クリック数・CPC・CTR・
+CV（購入数）・CVR・CPA・ROAS・ACOSです（費用は税込）。
+
+日付ごとの内訳は月別シートには載せず、別シート「日別広告実績」
+（`ads_daily_sheet.py` が作成、毎回全期間を作り直します）にまとめています。
+列構成は月間の内訳表と同じで、日付とキャンペーン名の組み合わせごとに1行です。
+
+```bash
+python3 ads_daily_sheet.py               # 全期間を書き込む
+python3 ads_daily_sheet.py --days 90     # 直近90日分だけに絞る
+python3 ads_daily_sheet.py --dry-run     # 書き込まずに内容を表示
+```
+
+#### 過去データの一括取り込み（`backfill_ads_csv.py`）
+
+`ads_email_report.py` が動き出す前の期間は広告データが無いため、Amazon広告
+管理画面から手動でエクスポートしたCSVで埋められます。エクスポート元によって
+列の並び順が違うことがあるため、位置ではなく列名で対応付けます。
+
+```bash
+python3 backfill_ads_csv.py エクスポートしたファイル.csv
+python3 backfill_ads_csv.py エクスポートしたファイル.csv --dry-run
+```
+
+指定したCSVの期間分（最も古い日付以降）を、`raw_ads_email` の該当期間ごと
+置き換えます。1回限りの復旧用スクリプトなので、自動実行（`run_all.py`）には
+含まれていません。
+
 #### 見た目
 
 金額は **通貨表示（小数点なし、マイナスは赤）**、割合は `0.00%`、件数は桁区切りで
@@ -621,7 +652,9 @@ amazon-report/
 ├── finances.py           # 手数料・入金内訳（Finances API）
 ├── settlement.py         # 精算レポート
 ├── ads_email_report.py   # Amazon Ads自動送信メールの取り込み（つなぎ実装）
-├── aggregate.py          # 集計用のデータ読み込み（原価・広告費の計算含む、表示は含まない）
+├── ads_daily_sheet.py    # 日別広告実績シート（キャンペーン×日付、毎回作り直し）
+├── backfill_ads_csv.py   # 広告データの過去分をCSVから一括取り込み（1回限りの復旧用）
+├── aggregate.py          # 集計用のデータ読み込み（原価・広告費・キャンペーン別集計を含む）
 ├── monthly.py            # 月別シート・月次推移（APIは呼ばない）
 ├── sheet_format.py       # シートの表示形式と配色
 ├── dashboard.py          # （旧）直近30日の集計。自動実行からは外しています

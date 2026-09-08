@@ -42,7 +42,23 @@ COLUMN_TYPES = {
      "実入金額", "実入金率%", "返品数", "取扱ASIN数", "データ充足"):
         [TEXT, "money", "pct", "num", "num", "pct", "money",
          "money", "pct", "num", "num", TEXT],
+    ("日付", "キャンペーン名", "インプレッション", "費用", "CPM", "クリック数", "CPC",
+     "CTR%", "CV（購入数）", "CVR%", "CPA", "ROAS", "ACOS%"):
+        [TEXT, TEXT, "num", "money", "money", "num", "money",
+         "pct", "num", "pct", "money", "dec", "pct"],
 }
+
+# キャンペーン別の内訳表（月別シートの広告サマリーの右に添える）。
+# build_requests の通常走査ではなく write_range 経由（build_side_table_requests）
+# で使うため、COLUMN_TYPESとは別に持つ。
+CAMPAIGN_TABLE_HEADER = [
+    "キャンペーン名", "インプレッション", "費用", "CPM", "クリック数", "CPC",
+    "CTR%", "CV（購入数）", "CVR%", "CPA", "ROAS", "ACOS%",
+]
+CAMPAIGN_TABLE_TYPES = [
+    TEXT, "num", "money", "money", "num", "money",
+    "pct", "num", "pct", "money", "dec", "pct",
+]
 
 # 月間サマリーは行ごとに型が変わるため、行ラベルで判定する
 ROW_TYPES = {
@@ -208,6 +224,68 @@ def build_requests(sheet_id, rows):
         "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
                   "startIndex": 1, "endIndex": max(width, 2)},
         "properties": {"pixelSize": 115},
+        "fields": "pixelSize",
+    }})
+
+    return requests
+
+
+def build_side_table_requests(sheet_id, top_row, top_col, rows, types):
+    """
+    シート内の任意の位置（月別シートの広告サマリーの右など）に独立して置く
+    小さな表の書式を組み立てる。build_requests のメイン走査（行全体を見出しと
+    突き合わせる方式）とは無関係に動くので、既存の表を壊さずに追加できる。
+
+    top_row / top_col はシート全体での絶対位置（0始まり）。rows[0] が見出し行。
+    """
+    if not rows:
+        return []
+    ncols = len(types)
+    header_row = top_row
+    data_start, data_end = top_row + 1, top_row + len(rows)
+
+    requests = [
+        # この範囲だけ既存の書式をリセットする（再実行してもズレを残さないため）
+        {"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": header_row, "endRowIndex": data_end,
+                      "startColumnIndex": top_col, "endColumnIndex": top_col + ncols},
+            "cell": {"userEnteredFormat": {}},
+            "fields": "userEnteredFormat",
+        }},
+        _cell(sheet_id, header_row, top_col, top_col + ncols,
+              {"backgroundColor": NAVY,
+               "textFormat": {"bold": True, "foregroundColor": WHITE},
+               "horizontalAlignment": "CENTER"},
+              "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"),
+    ]
+
+    if data_end > data_start:
+        for col, kind in enumerate(types):
+            if kind == TEXT:
+                continue
+            requests.append(_range(
+                sheet_id, data_start, data_end, top_col + col, top_col + col + 1,
+                {"numberFormat": FORMAT_OF[kind], "horizontalAlignment": "RIGHT"},
+                "userEnteredFormat(numberFormat,horizontalAlignment)",
+            ))
+
+        for row_index in range(data_start, data_end):
+            if (row_index - data_start) % 2 == 1:
+                requests.append(_cell(
+                    sheet_id, row_index, top_col, top_col + ncols,
+                    {"backgroundColor": BAND_BG}, "userEnteredFormat.backgroundColor",
+                ))
+
+    requests.append({"updateBorders": {
+        "range": {"sheetId": sheet_id, "startRowIndex": header_row, "endRowIndex": data_end,
+                  "startColumnIndex": top_col, "endColumnIndex": top_col + ncols},
+        "innerHorizontal": BORDER, "innerVertical": BORDER,
+        "top": BORDER, "bottom": BORDER, "left": BORDER, "right": BORDER,
+    }})
+    requests.append({"updateDimensionProperties": {
+        "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                  "startIndex": top_col, "endIndex": top_col + ncols},
+        "properties": {"pixelSize": 130},
         "fields": "pixelSize",
     }})
 

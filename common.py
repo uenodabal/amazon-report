@@ -298,6 +298,61 @@ def write_rows(cfg, worksheet_name, rows, formatter=None):
     log(f"  完了しました。{len(rows) - 1} 件を書き込みました。")
 
 
+def write_range(cfg, worksheet_name, top_left, rows, formatter=None):
+    """
+    既存シートの指定セルを起点に、追加の表を書き込む（シート自体は洗い替えしない）。
+
+    月別シートの余白（広告サマリーの右など）にキャンペーン別内訳のような
+    付帯的な表を添える用途。write_rows でそのシートの本体を書き込んだ「あと」に
+    呼び出すこと（write_rows はシートを clear するため、順番を逆にすると消える）。
+
+    formatter を渡す場合は formatter(worksheet_id, top_row, top_col, rows) の形で
+    呼び出す（row/col は0始まりのシート全体での絶対位置）。
+    """
+    import gspread
+
+    if not rows:
+        return
+
+    spreadsheet = _open_spreadsheet(cfg)
+    try:
+        worksheet = sheet_retry(
+            f"シート「{worksheet_name}」を開く（付帯表）",
+            lambda: spreadsheet.worksheet(worksheet_name),
+        )
+    except gspread.exceptions.WorksheetNotFound:
+        log(f"  ワークシート「{worksheet_name}」が見つからないため、付帯表の書き込みをスキップします。")
+        return
+
+    row0, col0 = gspread.utils.a1_to_rowcol(top_left)
+    needed_rows = row0 - 1 + len(rows) + 5
+    needed_cols = col0 - 1 + max(len(r) for r in rows) + 2
+    if worksheet.row_count < needed_rows or worksheet.col_count < needed_cols:
+        sheet_retry(
+            "シートの拡張（付帯表用）",
+            lambda: worksheet.resize(
+                rows=max(worksheet.row_count, needed_rows),
+                cols=max(worksheet.col_count, needed_cols),
+            ),
+        )
+
+    sheet_retry(
+        f"付帯表の書き込み（{top_left}）",
+        lambda: worksheet.update(values=rows, range_name=top_left),
+    )
+
+    if formatter is not None:
+        try:
+            requests_list = formatter(worksheet.id, row0 - 1, col0 - 1, rows)
+            if requests_list:
+                sheet_retry(
+                    "付帯表の書式適用",
+                    lambda: spreadsheet.batch_update({"requests": requests_list}),
+                )
+        except Exception as exc:
+            log(f"  （付帯表の書式適用に失敗しました: {exc}）")
+
+
 def _open_spreadsheet(cfg):
     import gspread
     from google.oauth2.service_account import Credentials
