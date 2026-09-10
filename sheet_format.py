@@ -42,9 +42,13 @@ COLUMN_TYPES = {
      "実入金額", "実入金率%", "返品数", "取扱ASIN数", "データ充足"):
         [TEXT, "money", "pct", "num", "num", "pct", "money",
          "money", "pct", "num", "num", TEXT],
-    ("日付", "キャンペーン名", "インプレッション", "費用", "CPM", "クリック数", "CPC",
+    # 日別広告実績シート：キャンペーンごとに表を分けているため、キャンペーン名の
+    # 列は持たず、見出し（■キャンペーン名）で示す。列構成はキャンペーン別内訳
+    # 表（CAMPAIGN_TABLE_HEADER）と同じ並びで、先頭列だけ「キャンペーン名」→
+    # 「日付」に変わる。
+    ("日付", "インプレッション", "費用", "CPM", "クリック数", "CPC",
      "CTR%", "CV（購入数）", "CVR%", "CPA", "ROAS", "ACOS%"):
-        [TEXT, TEXT, "num", "money", "money", "num", "money",
+        [TEXT, "num", "money", "money", "num", "money",
          "pct", "num", "pct", "money", "dec", "pct"],
 }
 
