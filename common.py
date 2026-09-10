@@ -71,6 +71,8 @@ class Config:
         self.refresh_token = os.environ.get("LWA_REFRESH_TOKEN", "")
         self.sa_json_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         self.spreadsheet_id = os.environ.get("SPREADSHEET_ID", "")
+        # Slackへの毎朝の実績報告用（Incoming Webhook）。任意（未設定なら投稿しない）。
+        self.slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
 
     def worksheet(self, env_name, default):
         """シート名を環境変数から読む。未設定なら既定値。"""

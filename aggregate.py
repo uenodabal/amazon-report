@@ -342,6 +342,53 @@ class Data:
 
         return {"total": total, "by_day": by_day, "by_asin": by_asin, "by_campaign": by_campaign}
 
+    def daily_range(self, start_date, end_date):
+        """
+        指定した期間（両端含む、"YYYY-MM-DD"）の日別データを返す。
+
+        summarize() は暦月単位でしか切り出せないが、Slack日報の
+        「直近7日間」は月をまたぐことがあるため、月に関係なく
+        日付の範囲だけで独立して集計できるようにしたもの。
+        中身は summarize() の by_day と同じ形（日付 → 指標名 → 値）。
+        """
+        traffic = [r for r in self.traffic if start_date <= r["date"] <= end_date]
+        finances = [r for r in self.finances if start_date <= r["date"] <= end_date]
+        ads = [r for r in self.ads if start_date <= r["date"] <= end_date]
+
+        by_day = defaultdict(lambda: defaultdict(float))
+        for r in traffic:
+            for k in ("sales", "units", "sessions", "refunded"):
+                by_day[r["date"]][k] += r[k]
+        for r in finances:
+            by_day[r["date"]]["net"] += r["net"]
+            by_day[r["date"]]["fees"] += r["referral"] + r["fba"] + r["other"]
+        for r in ads:
+            by_day[r["date"]]["ads_cost"] += r["cost"]
+            by_day[r["date"]]["ads_sales"] += r["sales"]
+            by_day[r["date"]]["ads_units"] += r["units"]
+            by_day[r["date"]]["ads_clicks"] += r["clicks"]
+        return by_day
+
+    def campaigns_in_range(self, start_date, end_date=None):
+        """
+        指定した日（end_date省略時は単日）のキャンペーン別広告実績を返す。
+        Slack日報の「昨日の広告キャンペーン実績」用。summarize() の
+        by_campaign と同じ形（キャンペーン名 → 指標名 → 値）。
+        """
+        if end_date is None:
+            end_date = start_date
+        ads = [r for r in self.ads if start_date <= r["date"] <= end_date]
+
+        by_campaign = defaultdict(lambda: defaultdict(float))
+        for r in ads:
+            b = by_campaign[r["campaign"]]
+            b["impressions"] += r["impressions"]
+            b["clicks"] += r["clicks"]
+            b["cost"] += r["cost"]
+            b["sales"] += r["sales"]
+            b["units"] += r["units"]
+        return by_campaign
+
     def asin_names(self):
         names = {}
         for asin, name in self.sku_map.values():

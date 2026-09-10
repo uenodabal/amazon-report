@@ -62,6 +62,8 @@ jobs:
           # GitHub の Settings > Secrets and variables > Actions で登録してください。
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # Slackへの毎朝の実績報告用（Incoming Webhook）。未設定でも他のジョブには影響しません。
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           PYTHONUNBUFFERED: "1"
           TZ: Asia/Tokyo
         run: |

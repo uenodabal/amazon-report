@@ -380,7 +380,7 @@ python3 ads_email_report.py --dry-run        # 取得のみ。書き込まない
 
 #### キャンペーン別の内訳（月別シートの広告サマリーの右／`日別広告実績`シート）
 
-月別シートの「■ 広告サマリー」の右側（H列以降）に、その月のキャンペーンごとの
+月別シートの「■ 広告サマリー」の右側（G列以降）に、その月のキャンペーンごとの
 内訳表を添えています。項目はインプレッション・費用・CPM・クリック数・CPC・CTR・
 CV（購入数）・CVR・CPA・ROAS・ACOSです（費用は税込）。
 
@@ -423,6 +423,37 @@ python3 backfill_ads_csv.py エクスポートしたファイル.csv --dry-run
 
 **「データ充足」列に ⚠ が付く月は、集計値が実際より少なく出ています。**
 その月の `sales_traffic.py` を取得すれば埋まります。
+
+### Slackへの毎朝の実績報告（`slack_daily_report.py`）
+
+毎朝、`raw_orders` / `raw_sales_traffic` / `raw_finances` / `raw_ads_email` を
+集計した内容をSlackに自動投稿します。Amazon APIは呼ばず、シートを読むだけです。
+
+投稿内容:
+
+- **■ 今月の進捗** — 当月の売上・着地予想売上・広告費・着地予想広告費・CPA
+- **■ 日販（直近7日間）** — 日ごとの売上・広告費・販売個数・広告経由の販売個数・
+  セッション・広告セッション・転換率%・広告転換率%
+- **■ 昨日の広告キャンペーン実績** — キャンペーンごとの前日の費用・クリック数・
+  CPC・CV（購入数）・CPA・ACOS%（末尾に全キャンペーン合計）
+
+着地予想の考え方や広告費の税込換算（×1.1）は、月別シートと同じロジックです。
+
+セットアップは、SlackでIncoming Webhookを1つ発行し（Slack App管理画面の
+「Incoming Webhooks」から対象チャンネルを選んで発行）、そのURLをGitHubリポジトリの
+**Settings > Secrets and variables > Actions** に `SLACK_WEBHOOK_URL` として登録する
+だけです（未設定の場合はSlack投稿だけスキップされ、他のジョブには影響しません）。
+
+自動実行では、広告メール到着後の**9:20の追い上げ実行でのみ**投稿します
+（`run_all.py --ads-only` の最後のジョブ）。7:00の本体実行では前日分の広告データ
+しか揃っていないため、二重投稿にならないようここでは投稿しません。
+
+```bash
+source .env
+python3 slack_daily_report.py               # 直近7日間で投稿
+python3 slack_daily_report.py --days 10     # 日販の対象日数を変える
+python3 slack_daily_report.py --dry-run     # 投稿せず内容を表示（動作確認用）
+```
 
 ### （旧）集計ダッシュボード（`dashboard.py` → シート `dashboard`）
 
@@ -532,6 +563,7 @@ python3 main.py --replace                       # シートを全置換（過去
 | `LWA_CLIENT_ID` / `LWA_CLIENT_SECRET` / `LWA_REFRESH_TOKEN` | Amazon SP-APIの認証情報 |
 | `SPREADSHEET_ID` | 書き込み先スプレッドシートのID |
 | `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | 広告メール取り込み用のGmailアカウントとアプリパスワード |
+| `SLACK_WEBHOOK_URL` | Slackへの毎朝の実績報告用（Incoming Webhook URL。任意 — 未設定ならSlack投稿だけスキップされます） |
 
 実行状況は GitHub の **Actions** タブから確認できます。また `_log` シートにも
 ジョブごとの成功/失敗が1行ずつ記録されます。今すぐ実行したい場合は、Actionsタブの
@@ -565,8 +597,11 @@ chmod +x *.sh
 | 4 | 精算レポート | 直近3件 | 直近6件 |
 | 5 | 広告データ（メール取込） | 直近3日 | 直近7日 |
 | 6 | 月別シート・月次推移 | 直近3ヶ月 | 直近6ヶ月 |
+| 7 | 日別広告実績 | 直近400日 | 全期間（約10年） |
 
-`run_all.py --ads-only` を付けると、5と6だけを実行します（広告メール到着後の追い上げ用）。
+`run_all.py --ads-only` を付けると、5・6・7に加えて**Slackへの実績レポート投稿**
+（`slack_daily_report.py`）まで実行します（広告メール到着後の9:20の追い上げ実行専用。
+7:00の本体実行では前日分の広告データしか無いため、Slack投稿はこの追い上げ実行でのみ行います）。
 
 ASIN別売上を「直近3日」にしているのは、**Amazonの数値が数日かけて確定する**ためです。
 毎日3日分を取り直して上書きすることで、確定後の正しい値に自動で置き換わります。
@@ -629,6 +664,7 @@ sudo pmset repeat wakeorpoweron MTWRFSU 05:55:00
 | `settlement.py` が0件 | **Finance and Accounting** ロールが未付与か、直近89日に精算が無い |
 | 文字化けする | 通常は自動判定されます。それでも化ける場合はご連絡ください |
 | `レート制限` が何度も出る | 正常な動作です。自動でリトライするので待ってください |
+| Slackに投稿されない | `SLACK_WEBHOOK_URL` が未設定（Secrets）か、Webhookが無効化されている可能性があります。`python3 slack_daily_report.py --dry-run` で内容だけ確認できます |
 
 ---
 
@@ -654,6 +690,7 @@ amazon-report/
 ├── ads_email_report.py   # Amazon Ads自動送信メールの取り込み（つなぎ実装）
 ├── ads_daily_sheet.py    # 日別広告実績シート（キャンペーン×日付、毎回作り直し）
 ├── backfill_ads_csv.py   # 広告データの過去分をCSVから一括取り込み（1回限りの復旧用）
+├── slack_daily_report.py # Slackへの毎朝の実績報告（Incoming Webhook）
 ├── aggregate.py          # 集計用のデータ読み込み（原価・広告費・キャンペーン別集計を含む）
 ├── monthly.py            # 月別シート・月次推移（APIは呼ばない）
 ├── sheet_format.py       # シートの表示形式と配色
