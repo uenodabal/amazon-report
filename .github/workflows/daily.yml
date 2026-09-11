@@ -17,6 +17,10 @@ on:
         description: "長期間の取り込み（初回や、数日途切れた後の復旧用）"
         type: boolean
         default: false
+      ads_only:
+        description: "広告データの取込＋Slack投稿のみ実行（9:20の追い上げ実行を今すぐテストしたいとき用）"
+        type: boolean
+        default: false
 
 # 前の実行がまだ終わっていないときに、二重に走らせない
 concurrency:
@@ -67,8 +71,8 @@ jobs:
           PYTHONUNBUFFERED: "1"
           TZ: Asia/Tokyo
         run: |
-          if [ "${{ github.event.schedule }}" = "20 0 * * *" ]; then
-            echo "モード: 広告データの追い上げ実行（9:20 JST）"
+          if [ "${{ github.event.schedule }}" = "20 0 * * *" ] || [ "${{ inputs.ads_only }}" = "true" ]; then
+            echo "モード: 広告データの追い上げ実行（Slack投稿含む）"
             python run_all.py --ads-only
           else
             python run_all.py ${{ inputs.full && '--full' || '' }}
