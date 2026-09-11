@@ -3,26 +3,26 @@
 毎朝の実績をSlackに自動投稿する
 
 内容:
-  ■ 今月の進捗              当月の売上・着地予想売上・広告費・着地予想広告費・CPA
-  ■ 日販（直近N日間）        日ごとの売上・広告費・個数・セッション・転換率など
-  ■ 広告キャンペーン実績（直近N日間）  キャンペーンごとの期間合計
-                            （費用・クリック数・CPC・CV・CPA・ACOS）
+  ■ 今月の進捗                    当月の売上・着地予想売上・広告費・着地予想広告費・CPA
+  ■ 日販（直近N日間・日ごと）       売上・広告費・個数・セッション・転換率
+  ■ 広告キャンペーン実績（直近M日間合計）  キャンペーンごとの期間合計
+                                  （費用・販売個数・CPA・Acos）
 
 Amazon APIは呼ばず、aggregate.py 経由でrawシートを読むだけです。
 Slackへの投稿は Incoming Webhook（SLACK_WEBHOOK_URL）にJSON（Block Kit）を
 POSTするだけのシンプルな方式です。広告費は税込（×1.1）で計算しています
 （aggregate.py の AD_COST_TAX_MULTIPLIER 参照）。
 
-見た目について: 等幅フォントのASCII表（コードブロック）はスマホの画面幅で
-セルの途中から折り返されて読みにくいため使わず、Slack標準の「fields」機能
-（関連する数値をペアで2列表示し、画面が狭いと自動で1列に折り返る）を使って
-1日・1キャンペーンごとにブロックを分けています。
+見た目について: Slackの「fields」（2列グリッド）やコードブロックのASCII表は
+スマホ幅で崩れて読みにくいため使わず、通常のテキスト（1項目1行）を
+Block Kitのsectionブロックに積み重ねるだけのシンプルな形にしています。
 
 使い方:
     source .env
-    python3 slack_daily_report.py               # 直近7日間で投稿
-    python3 slack_daily_report.py --days 10      # 対象日数を変える
-    python3 slack_daily_report.py --dry-run      # 投稿せず内容を表示
+    python3 slack_daily_report.py                # 日販=直近3日間、キャンペーン=直近7日間合計で投稿
+    python3 slack_daily_report.py --days 10       # キャンペーン集計の対象日数を変える
+    python3 slack_daily_report.py --daily-days 5  # 日販の表示日数を変える
+    python3 slack_daily_report.py --dry-run       # 投稿せず内容を表示
 """
 
 import argparse
@@ -41,8 +41,8 @@ def _date_label(date_str):
     return f"{dt.month}/{dt.day}（{JP_WEEKDAYS[dt.weekday()]}）"
 
 
-def _field(label, value):
-    return {"type": "mrkdwn", "text": f"{label}\n{value}"}
+def _section(text):
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
 
 
 # ---------------------------------------------------------------------------
@@ -70,21 +70,24 @@ def build_progress_section(data):
 
 
 def _recent_dates_with_data(data, days):
-    """売上 or 広告データがある日付を新しい順に集め、直近N日分だけ返す。
-    日販とキャンペーン集計の両方で、同じ期間を指すように共通で使う。"""
+    """売上 or 広告データがある日付を新しい順に集め、直近N日分だけ返す。"""
     dates = {r["date"] for r in data.traffic} | {r["date"] for r in data.ads}
     return sorted(dates, reverse=True)[:days]
 
 
+def _period_label(dates, days):
+    return f"{min(dates)}〜{max(dates)}" if dates else f"直近{days}日間"
+
+
 # ---------------------------------------------------------------------------
-# ■ 日販（直近N日間）：1日1ブロック（Slackのfields＝2列表示）
+# ■ 日販（直近N日間・日ごと）：通常のテキストで1日ずつ
 # ---------------------------------------------------------------------------
-def build_daily_fields(data, dates):
+def build_daily_texts(data, dates):
     if not dates:
-        return [{"type": "section", "text": {"type": "mrkdwn", "text": "（データがまだありません）"}}]
+        return ["（データがまだありません）"]
 
     by_day = data.daily_range(min(dates), max(dates))
-    blocks = []
+    texts = []
     for date in dates:  # 新しい日付が上
         d = by_day.get(date, {})
         sales = round(d.get("sales", 0))
@@ -94,99 +97,80 @@ def build_daily_fields(data, dates):
         sessions = int(d.get("sessions", 0))
         ads_sessions = int(d.get("ads_clicks", 0))
         cvr = pct(d.get("units", 0), d.get("sessions", 0))
-        ads_cvr = pct(d.get("ads_units", 0), d.get("ads_clicks", 0))
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{_date_label(date)}*"},
-            "fields": [
-                _field("売上", f"¥{sales:,}"),
-                _field("広告費", f"¥{ads_cost:,}"),
-                _field("個数", f"{units}（広告{ads_units}）"),
-                _field("Sess", f"{sessions}（広告{ads_sessions}）"),
-                _field("転換率", f"{cvr:.2f}%"),
-                _field("広告転換率", f"{ads_cvr:.2f}%"),
-            ],
-        })
-    return blocks
+        texts.append(
+            f"*{_date_label(date)}*\n"
+            f"売上：¥{sales:,}\n"
+            f"広告費：¥{ads_cost:,}\n"
+            f"個数：{units}（広告{ads_units}）\n"
+            f"セッション：{sessions}（広告{ads_sessions}）\n"
+            f"転換率：{cvr:.2f}%"
+        )
+    return texts
 
 
 # ---------------------------------------------------------------------------
-# ■ 広告キャンペーン実績（直近N日間・日販と同じ期間の合計）
+# ■ 広告キャンペーン実績（直近M日間合計）：キャンペーンごとに通常のテキストで
 # ---------------------------------------------------------------------------
-def build_campaign_fields(data, dates):
+def build_campaign_texts(data, dates):
     if not dates:
-        return [{"type": "section", "text": {"type": "mrkdwn", "text": "（広告データがまだありません）"}}]
+        return ["（広告データがまだありません）"]
 
     by_campaign = data.campaigns_in_range(min(dates), max(dates))
     if not by_campaign:
-        return [{"type": "section",
-                 "text": {"type": "mrkdwn", "text": "（この期間の広告データはまだありません）"}}]
+        return ["（この期間の広告データはまだありません）"]
 
     items = sorted(by_campaign.items(), key=lambda kv: kv[1].get("cost", 0.0), reverse=True)
-    blocks = []
-    total = {"cost": 0.0, "clicks": 0.0, "units": 0.0, "sales": 0.0}
+    texts = []
+    total = {"cost": 0.0, "units": 0.0, "sales": 0.0}
     for name, v in items:
-        cost, clicks = v.get("cost", 0.0), v.get("clicks", 0.0)
-        units, sales = v.get("units", 0.0), v.get("sales", 0.0)
-        cpc = cost / clicks if clicks else 0.0
+        cost, units, sales = v.get("cost", 0.0), v.get("units", 0.0), v.get("sales", 0.0)
         cpa = cost / units if units else 0.0
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{name}*"},
-            "fields": [
-                _field("費用", f"¥{round(cost):,}"),
-                _field("クリック", f"{int(clicks)}"),
-                _field("CPC", f"¥{round(cpc):,}"),
-                _field("CV", f"{int(units)}"),
-                _field("CPA", f"¥{round(cpa):,}"),
-                _field("ACOS", f"{pct(cost, sales):.2f}%"),
-            ],
-        })
+        texts.append(
+            f"○ *{name}*\n"
+            f"費用：¥{round(cost):,}\n"
+            f"販売個数：{int(units)}\n"
+            f"CPA：¥{round(cpa):,}\n"
+            f"Acos：{pct(cost, sales):.2f}%"
+        )
         for k in total:
             total[k] += v.get(k, 0.0)
 
-    cpc_t = total["cost"] / total["clicks"] if total["clicks"] else 0.0
     cpa_t = total["cost"] / total["units"] if total["units"] else 0.0
-    blocks.append({
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*合計*"},
-        "fields": [
-            _field("費用", f"¥{round(total['cost']):,}"),
-            _field("クリック", f"{int(total['clicks'])}"),
-            _field("CPC", f"¥{round(cpc_t):,}"),
-            _field("CV", f"{int(total['units'])}"),
-            _field("CPA", f"¥{round(cpa_t):,}"),
-            _field("ACOS", f"{pct(total['cost'], total['sales']):.2f}%"),
-        ],
-    })
-    return blocks
+    texts.append(
+        f"○ *合計*\n"
+        f"費用：¥{round(total['cost']):,}\n"
+        f"販売個数：{int(total['units'])}\n"
+        f"CPA：¥{round(cpa_t):,}\n"
+        f"Acos：{pct(total['cost'], total['sales']):.2f}%"
+    )
+    return texts
 
 
 # ---------------------------------------------------------------------------
 # Slack Block Kit の組み立てと投稿
 # ---------------------------------------------------------------------------
-def build_blocks(data, days):
+def build_blocks(data, days, daily_days):
     today = datetime.now(JST).strftime("%Y-%m-%d")
-    dates = _recent_dates_with_data(data, days)  # 日販とキャンペーン集計で共通の期間
-    period_label = f"{min(dates)}〜{max(dates)}" if dates else f"直近{days}日間"
+    dates_daily = _recent_dates_with_data(data, daily_days)
+    dates_campaign = _recent_dates_with_data(data, days)
 
     progress = build_progress_section(data)
-    daily_fields = build_daily_fields(data, dates)
-    campaign_fields = build_campaign_fields(data, dates)
+    daily_texts = build_daily_texts(data, dates_daily)
+    campaign_texts = build_campaign_texts(data, dates_campaign)
+
+    daily_label = _period_label(dates_daily, daily_days)
+    campaign_label = _period_label(dates_campaign, days)
 
     blocks = [
         {"type": "header",
          "text": {"type": "plain_text", "text": f"📊 {today} の実績報告", "emoji": True}},
-        {"type": "section",
-         "text": {"type": "mrkdwn", "text": f"*■ 今月の進捗*\n{progress}"}},
+        _section(f"*■ 今月の進捗*\n{progress}"),
         {"type": "divider"},
-        {"type": "section",
-         "text": {"type": "mrkdwn", "text": f"*■ 日販（{period_label}）*"}},
-        *daily_fields,
+        _section(f"*■ 日販（{daily_label}）*"),
+        *[_section(t) for t in daily_texts],
         {"type": "divider"},
-        {"type": "section",
-         "text": {"type": "mrkdwn", "text": f"*■ 広告キャンペーン実績（{period_label}）*"}},
-        *campaign_fields,
+        _section(f"*■ 広告キャンペーン実績（{campaign_label}合計）*"),
+        *[_section(t) for t in campaign_texts],
     ]
     fallback_text = f"{today} の実績報告です。"
     return blocks, fallback_text
@@ -199,13 +183,7 @@ def blocks_to_text(blocks):
         if block["type"] == "divider":
             parts.append("- - - - -")
             continue
-        text = block.get("text", {}).get("text", "")
-        fields = block.get("fields")
-        if fields:
-            field_text = "  |  ".join(f["text"].replace("\n", ": ") for f in fields)
-            parts.append(f"{text}\n{field_text}" if text else field_text)
-        else:
-            parts.append(text)
+        parts.append(block.get("text", {}).get("text", ""))
     return "\n\n".join(parts)
 
 
@@ -215,7 +193,8 @@ def post_to_slack(webhook_url, blocks, fallback_text):
 
 def main():
     parser = argparse.ArgumentParser(description="Slackへ毎朝の実績レポートを投稿します。")
-    parser.add_argument("--days", type=int, default=7, help="対象日数（既定: 7）")
+    parser.add_argument("--days", type=int, default=7, help="キャンペーン集計の対象日数（既定: 7）")
+    parser.add_argument("--daily-days", type=int, default=3, help="日販の表示日数（既定: 3）")
     parser.add_argument("--dry-run", action="store_true", help="投稿せずに内容を表示")
     args = parser.parse_args()
 
@@ -239,7 +218,7 @@ def main():
         log("rawデータを読み込んでいます…")
         data = Data(cfg)
 
-        blocks, fallback_text = build_blocks(data, args.days)
+        blocks, fallback_text = build_blocks(data, args.days, args.daily_days)
 
         if args.dry_run:
             log("--dry-run のため投稿は行いません。内容:")
