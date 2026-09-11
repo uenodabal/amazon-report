@@ -4,7 +4,7 @@
 
 内容:
   ■ 今月の進捗                    当月の売上・着地予想売上・広告費・着地予想広告費・CPA
-  ■ 日販（直近N日間・日ごと）       売上・広告費・個数・セッション・転換率
+  ■ 日販（直近N日間・日ごと）       売上・広告費・個数・セッション・転換率（広告転換率）
   ■ 広告キャンペーン実績（直近M日間合計）  キャンペーンごとの期間合計
                                   （費用・販売個数・CPA・Acos）
 
@@ -97,13 +97,14 @@ def build_daily_texts(data, dates):
         sessions = int(d.get("sessions", 0))
         ads_sessions = int(d.get("ads_clicks", 0))
         cvr = pct(d.get("units", 0), d.get("sessions", 0))
+        ads_cvr = pct(d.get("ads_units", 0), d.get("ads_clicks", 0))
         texts.append(
             f"*{_date_label(date)}*\n"
             f"売上：¥{sales:,}\n"
             f"広告費：¥{ads_cost:,}\n"
             f"個数：{units}（広告{ads_units}）\n"
             f"セッション：{sessions}（広告{ads_sessions}）\n"
-            f"転換率：{cvr:.2f}%"
+            f"転換率：{cvr:.2f}%（広告転換率：{ads_cvr:.2f}%）"
         )
     return texts
 
