@@ -10,6 +10,7 @@ launchd から毎日呼び出されることを想定しています。
 使い方:
     python3 run_all.py              # 通常実行（日次運用向け）
     python3 run_all.py --full       # 長めの期間で取り込む（初回・復旧用）
+    python3 run_all.py --resync     # 過去30日分のASIN別売上を取り直す（キャンセル反映用、10日に1回）
     python3 run_all.py --dry-run    # 書き込まずに実行
 """
 
@@ -30,23 +31,23 @@ JOB_TIMEOUT_SEC = 7200  # 2時間
 LOG_SHEET = "_log"
 LOG_HEADER = ["実行日時", "ジョブ", "結果", "所要秒", "詳細"]
 
-# (ジョブ名, スクリプト, 通常時の日数, --full 時の日数)
+# (ジョブ名, スクリプト, 通常時の日数, --full 時の日数, 追加オプション)
 # 精算レポートは日数ではなく「件数」を指定するため、引数名を別扱いにする（下記 JOB_ARG）
 JOBS = [
-    ("注文レポート", "main.py", 30, 90),
-    ("ASIN別売上", "sales_traffic.py", 3, 30),
-    ("手数料・入金内訳", "finances.py", 30, 180),
+    ("注文レポート", "main.py", 30, 90, ()),
+    ("ASIN別売上", "sales_traffic.py", 3, 30, ()),
+    ("手数料・入金内訳", "finances.py", 30, 180, ()),
     # 精算レポートは90日より前を取得できないため、--full でも6件（約3ヶ月分）が上限
-    ("精算レポート", "settlement.py", 3, 6),
+    ("精算レポート", "settlement.py", 3, 6, ()),
     # Amazon Adsの自動送信メール（毎朝8:45〜9:00頃着）を取り込む。
     # 本体の実行時刻（毎朝7時台）より後に届くため、この時間の実行では
     # 前日分のメールを拾うことになる。最新の当日分は ADS_ONLY_JOBS の
     # 追い上げ実行（毎朝9:20頃）で取り込む。
-    ("広告データ（メール取込）", "ads_email_report.py", 3, 7),
+    ("広告データ（メール取込）", "ads_email_report.py", 3, 7, ()),
     # 最後にrawデータを集計して月別シートと月次推移を作る
-    ("月別シート・月次推移", "monthly.py", 3, 6),
+    ("月別シート・月次推移", "monthly.py", 3, 6, ()),
     # キャンペーン×日付ごとの実績一覧（日別広告実績シート）。全期間を作り直す。
-    ("日別広告実績", "ads_daily_sheet.py", 400, 3650),
+    ("日別広告実績", "ads_daily_sheet.py", 400, 3650, ()),
 ]
 
 # 広告メールが届いた後に行う追い上げ実行用（毎朝9:20頃）。
@@ -54,10 +55,21 @@ JOBS = [
 # 最後にSlackへ実績レポートを投稿する（この時点でようやく前日分の広告データが
 # 揃うため、Slack投稿はこの追い上げ実行だけで行う。7時の本体実行では行わない）。
 ADS_ONLY_JOBS = [
-    ("広告データ（メール取込）", "ads_email_report.py", 3, 7),
-    ("月別シート・月次推移", "monthly.py", 3, 6),
-    ("日別広告実績", "ads_daily_sheet.py", 400, 3650),
-    ("Slack日次レポート", "slack_daily_report.py", 7, 7),
+    ("広告データ（メール取込）", "ads_email_report.py", 3, 7, ()),
+    ("月別シート・月次推移", "monthly.py", 3, 6, ()),
+    ("日別広告実績", "ads_daily_sheet.py", 400, 3650, ()),
+    ("Slack日次レポート", "slack_daily_report.py", 7, 7, ()),
+]
+
+# 10日に1回、過去30日分の「ASIN別売上」を取り直すための再同期実行用。
+# sales_traffic.py は直近3日分しか自動で取り直さない（RESTATE_DAYS参照）ため、
+# 注文から3日以上経ってから発生したキャンセル・返品は取り込んだ後ずっと反映されない。
+# ここでは --refetch を付けて過去30日分を強制的に取り直し、最新の状態に合わせてから
+# 月別シートも作り直す。
+RESYNC_DAYS = 30
+RESYNC_JOBS = [
+    ("ASIN別売上（過去30日再取得）", "sales_traffic.py", RESYNC_DAYS, RESYNC_DAYS, ("--refetch",)),
+    ("月別シート・月次推移", "monthly.py", 3, 3, ()),
 ]
 
 # スクリプトごとの数量オプション名（既定は --days）
@@ -69,7 +81,7 @@ JOB_ARG = {
 }
 
 
-def run_job(name, script, amount, dry_run):
+def run_job(name, script, amount, dry_run, extra_args=()):
     """
     1ジョブを別プロセスで実行し、(成功したか, 所要秒, 要約) を返す。
 
@@ -78,13 +90,14 @@ def run_job(name, script, amount, dry_run):
     「動いているのか固まっているのか」が判別できなくなるため。
     """
     option = JOB_ARG.get(script, "--days")
-    command = [sys.executable, script, option, str(amount)]
+    command = [sys.executable, script, option, str(amount), *extra_args]
     if dry_run:
         command.append("--dry-run")
 
     log("")
     log("─" * 60)
-    log(f"▶ {name}（{script} {option} {amount}）")
+    extra_desc = f" {' '.join(extra_args)}" if extra_args else ""
+    log(f"▶ {name}（{script} {option} {amount}{extra_desc}）")
     log("─" * 60)
 
     # 子プロセス側の出力バッファリングを止める（そのままだと行が遅れて届く）
@@ -166,27 +179,39 @@ def main():
         action="store_true",
         help="広告データの取込と月次シートの再生成のみ実行（広告メール到着後の追い上げ実行用）",
     )
+    parser.add_argument(
+        "--resync",
+        action="store_true",
+        help="過去30日分のASIN別売上を取り直して月別シートを作り直す（キャンセル反映用、10日に1回の実行を想定）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="書き込まずに実行")
     args = parser.parse_args()
 
     cfg = Config()
     cfg.validate(need_sheets=not args.dry_run)
 
-    jobs = ADS_ONLY_JOBS if args.ads_only else JOBS
+    if args.resync:
+        jobs = RESYNC_JOBS
+    elif args.ads_only:
+        jobs = ADS_ONLY_JOBS
+    else:
+        jobs = JOBS
 
     started_at = datetime.now(JST)
     log("=" * 60)
     log(f"自動取得を開始します（{started_at:%Y-%m-%d %H:%M:%S}）")
-    if args.ads_only:
+    if args.resync:
+        log("モード: --resync（過去30日分のASIN別売上を再取得）")
+    elif args.ads_only:
         log("モード: --ads-only（広告データの追い上げ実行）")
     elif args.full:
         log("モード: --full（長期間の取り込み）")
     log("=" * 60)
 
     results = []
-    for name, script, days, full_days in jobs:
+    for name, script, days, full_days, extra_args in jobs:
         ok, elapsed, detail = run_job(
-            name, script, full_days if args.full else days, args.dry_run
+            name, script, full_days if args.full else days, args.dry_run, extra_args
         )
         results.append((name, ok, elapsed, detail))
 
