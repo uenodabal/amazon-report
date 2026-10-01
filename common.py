@@ -53,7 +53,11 @@ MARKETPLACE_JP = "A1VC38T7YXB528"
 SHEET_CHUNK_ROWS = 2000
 
 # スプレッドシート操作のリトライ回数
-SHEET_MAX_RETRIES = 5
+# 429（レート制限 / クォータ超過）は「1分あたり」の制限が多いため、
+# 合計の待ち時間が1分を十分超えるように、回数と初期待機時間を大きめにしてある
+# （3 + 6 + 12 + 24 + 48 = 93秒、6回目まで待てば+96秒で計189秒）。
+SHEET_MAX_RETRIES = 6
+SHEET_RETRY_BASE_DELAY = 3
 
 
 def log(message):
@@ -224,7 +228,7 @@ def sheet_retry(label, func):
     Amazon側には最初からリトライを入れていたが、Google側は素通しだった。
     そのため一度の切断で、取得済みのデータごと処理が失われていた。
     """
-    delay = 2
+    delay = SHEET_RETRY_BASE_DELAY
     for attempt in range(1, SHEET_MAX_RETRIES + 1):
         try:
             return func()
@@ -355,9 +359,22 @@ def write_range(cfg, worksheet_name, top_left, rows, formatter=None):
             log(f"  （付帯表の書式適用に失敗しました: {exc}）")
 
 
+# プロセス内キャッシュ：read_sheet/write_rows/write_range/append_row は
+# それぞれ独立に _open_spreadsheet を呼んでいたため、1回のスクリプト実行で
+# 同じスプレッドシートを何度も開き直していた（open_by_key もAPI呼び出しの
+# ため、読み取りクォータを余計に消費する）。1プロセス内では同じスプレッド
+# シートを開き直す必要が無いので、最初の1回だけ開いて再利用する。
+_spreadsheet_cache = {}
+
+
 def _open_spreadsheet(cfg):
     import gspread
     from google.oauth2.service_account import Credentials
+
+    cache_key = (cfg.sa_json_path, cfg.spreadsheet_id)
+    cached = _spreadsheet_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     credentials = Credentials.from_service_account_file(
         cfg.sa_json_path,
@@ -368,7 +385,7 @@ def _open_spreadsheet(cfg):
     )
     client = gspread.authorize(credentials)
     try:
-        return sheet_retry(
+        spreadsheet = sheet_retry(
             "スプレッドシートを開く",
             lambda: client.open_by_key(cfg.spreadsheet_id),
         )
@@ -379,6 +396,9 @@ def _open_spreadsheet(cfg):
             "編集権限を付与しているか確認してください。\n"
             f"詳細: {exc}"
         ) from exc
+
+    _spreadsheet_cache[cache_key] = spreadsheet
+    return spreadsheet
 
 
 def read_sheet(cfg, worksheet_name):
