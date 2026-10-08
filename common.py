@@ -241,7 +241,7 @@ def sheet_retry(label, func):
             delay *= 2
 
 
-def write_rows(cfg, worksheet_name, rows, formatter=None):
+def write_rows(cfg, worksheet_name, rows, formatter=None, value_input_option=None):
     """
     ワークシートを洗い替えして書き込む。
     何度実行しても結果が同じになる（冪等）。
@@ -249,6 +249,9 @@ def write_rows(cfg, worksheet_name, rows, formatter=None):
 
     formatter を渡すと、書き込み後に書式（表示形式・色）を適用する。
     formatter(worksheet_id, rows) -> Sheets APIのリクエスト配列
+
+    value_input_option に "USER_ENTERED" を渡すと、"="で始まる文字列を
+    スプレッドシート上の数式として解釈させる（既定ではRAW扱いで文字列のまま入る）。
     """
     import gspread
 
@@ -281,7 +284,12 @@ def write_rows(cfg, worksheet_name, rows, formatter=None):
         chunk = rows[start : start + SHEET_CHUNK_ROWS]
         sheet_retry(
             f"{start + len(chunk)}行目までの書き込み",
-            lambda c=chunk, s=start: worksheet.update(values=c, range_name=f"A{s + 1}"),
+            lambda c=chunk, s=start: worksheet.update(
+                values=c,
+                range_name=f"A{s + 1}",
+                raw=value_input_option is None,
+                value_input_option=value_input_option,
+            ),
         )
         log(f"  {start + len(chunk)} / {len(rows)} 行")
 

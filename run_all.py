@@ -38,7 +38,7 @@ JOBS = [
     ("ASIN別売上", "sales_traffic.py", 3, 30, ()),
     # 在庫管理シートの更新。raw_orders・raw_sales_traffic を読むだけで
     # Amazonへの新しい問い合わせは行わないため、直前の2ジョブの後に置く。
-    ("在庫管理", "inventory.py", 30, 30, ()),
+    ("在庫管理", "inventory.py", 14, 14, ()),
     ("手数料・入金内訳", "finances.py", 30, 180, ()),
     # 精算レポートは90日より前を取得できないため、--full でも6件（約3ヶ月分）が上限
     ("精算レポート", "settlement.py", 3, 6, ()),
